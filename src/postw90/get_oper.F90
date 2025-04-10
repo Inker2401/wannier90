@@ -257,7 +257,7 @@ contains
     use w90_constants, only: dp, cmplx_0, cmplx_i
     use w90_parameters, only: num_kpts, nntot, num_wann, wb, bk, timing_level, &
       num_bands, ndimwin, nnlist, have_disentangled, &
-      transl_inv, nncell, effective_model
+      transl_inv, nncell, effective_model, devel_flag
     use w90_postw90_common, only: nrpts
     use w90_io, only: stdout, io_file_unit, io_error, io_stopwatch, &
       seedname
@@ -477,16 +477,20 @@ contains
 
       close (mmn_in)
 
-      berry_fmt_seed=trim(adjustl(seedname))//'.AA_q'
-      write(stdout,*) ' Writing Berry connection AA_q along each direction to '//trim(berry_fmt_seed)//'.X'
-
       call fourier_q_to_R(AA_q(:, :, :, 1), AA_R(:, :, :, 1))
       call fourier_q_to_R(AA_q(:, :, :, 2), AA_R(:, :, :, 2))
       call fourier_q_to_R(AA_q(:, :, :, 3), AA_R(:, :, :, 3))
 
-      call write_AA_fmt(AA_q,trim(berry_fmt_seed),'x',.true.)
-      call write_AA_fmt(AA_q,trim(berry_fmt_seed),'y',.true.)
-      call write_AA_fmt(AA_q,trim(berry_fmt_seed),'z',.true.)
+      if (index(devel_flag, 'write_AA_recip')>0) then
+         ! Write Berry connection in reciprocal space to a file along each direction V Ravindran 09/12/24
+         berry_fmt_seed=trim(adjustl(seedname))//'.AA_q'
+         write(stdout,*) ' Writing Berry connection AA_q along each direction to '//trim(berry_fmt_seed)//'.X'
+         write(stdout,*) ' where X is the Cartesian direction.'
+
+         call write_AA_fmt(AA_q,trim(berry_fmt_seed),'x',.true.)
+         call write_AA_fmt(AA_q,trim(berry_fmt_seed),'y',.true.)
+         call write_AA_fmt(AA_q,trim(berry_fmt_seed),'z',.true.)
+      end if
 
     endif !on_root
 
@@ -510,14 +514,16 @@ contains
       ! in real/reciprocal space.
       ! NB: This routine assumes entirety of Berry connection is
       ! stored on the root node.
+      ! Written by : Visagan Ravindran 09/12/2024
       !==============================================================
       implicit none
       complex(kind=dp), intent(in) :: AA_elem(:,:,:,:)
       character(len=*), intent(in) :: seed
-      character,     intent(inout) :: dir
+      character,        intent(in) :: dir
       logical                      :: reciprocal
 
       character(1000)  :: filename
+      character:: l_dir
 
       integer :: berryunit
       integer :: idir, iw1, iw2, nk
@@ -527,13 +533,13 @@ contains
       select case(dir)
       case('X','x')
          ! Ensure lower case for file names
-         dir='x'
+         l_dir='x'
          idir=1
       case('Y','y')
-         dir='y'
+         l_dir='y'
          idir=2
       case('Z','z')
-         dir='z'
+         l_dir='z'
          idir=3
       case default
          call io_error('write_AA_q_fmt: Unknown direction specified for file')
@@ -542,23 +548,23 @@ contains
       ! Only root node should do any IO!
       if (on_root) then
          ! Construct file name and open on root node
-         filename=trim(seed)//'.'//trim(dir)
+         filename=trim(seed)//'.'//trim(l_dir)
          filename=trim(adjustl(filename))
          berryunit = io_file_unit()
 
          open(unit=berryunit,file=trim(filename),action='WRITE',form='FORMATTED',status='REPLACE',iostat=ierr)
-         if (ierr/=0) call io_abort('write_AA_q_fmt: Failed to open '//trim(filename))
+         if (ierr/=0) call io_error('write_AA_q_fmt: Failed to open '//trim(filename))
 
          ! Write the header
          write(berryunit,'(A)') 'BEGIN HEADER'
          write(berryunit,200) 'Number of Wannier functions ', size(AA_elem,1)
          if (reciprocal) then
             write(berryunit,200) 'Number of K-points ', size(AA_elem,3)
-            write(berryunit,'(A,T40,A)') 'K-point direction ', dir
+            write(berryunit,'(A,T40,A)') 'K-point direction ', l_dir
             write(berryunit,'(A)') 'Data format: <kpt> <orbital1> <orbital2> <real_part> <imag_part>'
          else
             write(berryunit,200) 'Number of real space grid-points ', size(AA_elem,3)
-            write(berryunit,'(A,T40,A)') 'Direction ', dir
+            write(berryunit,'(A,T40,A)') 'Direction ', l_dir
             write(berryunit,'(A)') 'Data format: <grid_pt> <orbital1> <orbital2> <real_part> <imag_part>'
          end if
 200      format(A,T40,I8)
