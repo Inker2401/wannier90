@@ -118,11 +118,11 @@ ws_distance.o: ../ws_distance.F90 constants.o io.o parameters.o
 transport.o: ../transport.F90 constants.o io.o parameters.o hamiltonian.o
 	 $(COMPILER) $(POSTOPTS) $(FCOPTS) -c ../transport.F90
 
-sitesym.o : ../sitesym.F90 utility.o parameters.o constants.o 
+sitesym.o : ../sitesym.F90 utility.o parameters.o constants.o
 	$(COMPILER) $(POSTOPTS) $(FCOPTS) -c ../sitesym.F90
 
 comms.o: ../comms.F90 constants.o io.o
-	 $(COMPILER) $(POSTOPTS) $(FCOPTS) -c ../comms.F90
+	 $(COMPILER) $(POSTOPTS) $(FCOPTS) -fallow-argument-mismatch -c ../comms.F90
 
 boltzwann.o: $(POSTDIR)boltzwann.F90 constants.o parameters.o io.o utility.o postw90_common.o get_oper.o wan_ham.o comms.o spin.o dos.o
 	 $(COMPILER) $(POSTOPTS) $(FCOPTS) -c $(POSTDIR)boltzwann.F90
