@@ -278,6 +278,8 @@ contains
     logical                       :: nn_found
     character(len=60)             :: header
 
+    character(len=1000)           :: berry_fmt_seed
+
     if (timing_level > 1 .and. on_root) call io_stopwatch('get_oper: get_AA_R', 1)
 
     if (.not. allocated(AA_R)) then
@@ -475,9 +477,16 @@ contains
 
       close (mmn_in)
 
+      berry_fmt_seed=trim(adjustl(seedname))//'.AA_q'
+      write(stdout,*) ' Writing Berry connection AA_q along each direction to '//trim(berry_fmt_seed)//'.X'
+
       call fourier_q_to_R(AA_q(:, :, :, 1), AA_R(:, :, :, 1))
       call fourier_q_to_R(AA_q(:, :, :, 2), AA_R(:, :, :, 2))
       call fourier_q_to_R(AA_q(:, :, :, 3), AA_R(:, :, :, 3))
+
+      call write_AA_fmt(AA_q,trim(berry_fmt_seed),'x',.true.)
+      call write_AA_fmt(AA_q,trim(berry_fmt_seed),'y',.true.)
+      call write_AA_fmt(AA_q,trim(berry_fmt_seed),'z',.true.)
 
     endif !on_root
 
@@ -493,6 +502,83 @@ contains
 103 call io_error('Error in get_AA_R: problem opening file '// &
                   trim(seedname)//'_AA_R.dat')
 
+  contains
+
+    subroutine write_AA_fmt(AA_elem,seed,dir,reciprocal)
+      !=============================================================
+      ! Writes the Berry connection matrix along a single-direction
+      ! in real/reciprocal space.
+      ! NB: This routine assumes entirety of Berry connection is
+      ! stored on the root node.
+      !==============================================================
+      implicit none
+      complex(kind=dp), intent(in) :: AA_elem(:,:,:,:)
+      character(len=*), intent(in) :: seed
+      character,     intent(inout) :: dir
+      logical                      :: reciprocal
+
+      character(1000)  :: filename
+
+      integer :: berryunit
+      integer :: idir, iw1, iw2, nk
+
+      integer :: ierr
+
+      select case(dir)
+      case('X','x')
+         ! Ensure lower case for file names
+         dir='x'
+         idir=1
+      case('Y','y')
+         dir='y'
+         idir=2
+      case('Z','z')
+         dir='z'
+         idir=3
+      case default
+         call io_error('write_AA_q_fmt: Unknown direction specified for file')
+      end select
+
+      ! Only root node should do any IO!
+      if (on_root) then
+         ! Construct file name and open on root node
+         filename=trim(seed)//'.'//trim(dir)
+         filename=trim(adjustl(filename))
+         berryunit = io_file_unit()
+
+         open(unit=berryunit,file=trim(filename),action='WRITE',form='FORMATTED',status='REPLACE',iostat=ierr)
+         if (ierr/=0) call io_abort('write_AA_q_fmt: Failed to open '//trim(filename))
+
+         ! Write the header
+         write(berryunit,'(A)') 'BEGIN HEADER'
+         write(berryunit,200) 'Number of Wannier functions ', size(AA_elem,1)
+         if (reciprocal) then
+            write(berryunit,200) 'Number of K-points ', size(AA_elem,3)
+            write(berryunit,'(A,T40,A)') 'K-point direction ', dir
+            write(berryunit,'(A)') 'Data format: <kpt> <orbital1> <orbital2> <real_part> <imag_part>'
+         else
+            write(berryunit,200) 'Number of real space grid-points ', size(AA_elem,3)
+            write(berryunit,'(A,T40,A)') 'Direction ', dir
+            write(berryunit,'(A)') 'Data format: <grid_pt> <orbital1> <orbital2> <real_part> <imag_part>'
+         end if
+200      format(A,T40,I8)
+         write(berryunit,'(A)') 'END HEADER'
+         write(berryunit,'(A)') '  '
+
+         ! Write matrix elements
+         do ik=1,size(AA_elem,3)
+            do iw1=1,size(AA_elem,1)
+               do iw2=1,size(AA_elem,2)
+                  write(berryunit,201) ik, iw1, iw2, real(AA_elem(iw1,iw2,ik,idir),dp), aimag(AA_elem(iw1,iw2,ik,idir))
+               end do
+               write(berryunit)
+            end do
+         end do
+201      format(3I8,ES25.15,1x,ES25.15)
+
+         close(berryunit)
+      end if ! on_root
+    end subroutine write_AA_fmt
   end subroutine get_AA_R
 
   !=====================================================
