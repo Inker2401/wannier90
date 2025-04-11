@@ -65,6 +65,10 @@ module w90_berry
   integer, parameter, public:: berry_alpha_beta_S(3, 3) = reshape((/1, 4, 5, 4, 2, 6, 5, 6, 3/), (/3, 3/))
 !(/  (/1,4,5/), (/ 4,2,6 /)  , (/ 5,6,3 /)   /)
 
+  ! Interpolated Berry connection - module level for now as Berry connection not returned by routines that calculate it
+  logical :: write_AA_int
+  integer :: AA_int_unit, nk_interpolated
+
 contains
 
   !===========================================================!
@@ -100,7 +104,7 @@ contains
       kubo_adpt_smr, kubo_adpt_smr_fac, &
       kubo_adpt_smr_max, kubo_smr_fixed_en_width, &
       scissors_shift, num_valence_bands, &
-      shc_bandshift, shc_bandshift_firstband, shc_bandshift_energyshift
+      shc_bandshift, shc_bandshift_firstband, shc_bandshift_energyshift, devel_flag
     use w90_get_oper, only: get_HH_R, get_AA_R, get_BB_R, get_CC_R, &
       get_SS_R, get_SHC_R
 
@@ -173,11 +177,17 @@ contains
     eval_kubo = .false.
     eval_sc = .false.
     eval_shc = .false.
+    write_AA_int = .false.
     if (index(berry_task, 'ahc') > 0) eval_ahc = .true.
     if (index(berry_task, 'morb') > 0) eval_morb = .true.
     if (index(berry_task, 'kubo') > 0) eval_kubo = .true.
     if (index(berry_task, 'sc') > 0) eval_sc = .true.
     if (index(berry_task, 'shc') > 0) eval_shc = .true.
+    if (index(devel_flag,'write_aa_int') > 0) write_AA_int=.true.
+    if (write_AA_int .and. num_nodes>1) then
+       ! TODO V Ravindran - write parallel code
+       call io_error('berry_main: Writing interpolated Berry connection can only be done in serial')
+    end if
 
     ! Wannier matrix elements, allocations and initializations
     !
@@ -347,6 +357,24 @@ contains
       end do
     end do
 
+    ! Open files to write interpolated Berry connection and write the header V Ravindran 11/04/2025
+    if (write_AA_int .and. on_root) then
+       AA_int_unit = io_file_unit()
+       file_name=trim(seedname)//'.AA_int'
+       open(AA_int_unit,file=trim(file_name), action='WRITE',form='FORMATTED',status='UNKNOWN',iostat=ierr)
+       if (ierr/=0) call io_error('Failed to open interpolated Berry connection file')
+       write(stdout,*) ' Interpolated Berry connection will be written to '//trim(file_name)
+
+       write(AA_int_unit,'(A,I4)') 'Number of Wannier functions ', num_wann
+       write(AA_int_unit,'(A,3I4)') 'Interpolation k-point MP grid ', berry_kmesh
+       write(AA_int_unit,'(A,I9)') 'Number of k-points ', product(berry_kmesh) ! num_int_kpoints_on_node not allocated here?
+       write(AA_int_unit,'(A,G15.8)') 'Each kpoint has a weight of: ', 1.0_dp/product(berry_kmesh)
+       write(AA_int_unit,'(A)') 'Format for k-point: <num_kpoint> <kx> <ky> <kz>'
+       write(AA_int_unit,'(A)') 'Format for Berry connection: <num_wann_1> <num_wann_2> <x_mat_elem> <y_mat_elem> <z_mat_elem>'
+       write(AA_int_unit,'(A)') 'For each matrix element, the real part is followed by the imaginary part'
+       write(AA_int_unit,'(A,/)') 'END HEADER'
+    end if
+
     ! Loop over interpolation k-points
     !
     if (wanint_kpoint_file) then
@@ -427,6 +455,7 @@ contains
         endif
 
         if (eval_sc) then
+          nk_interpolated = loop_xyz
           call berry_get_sc_klist(kpt, sc_k_list)
           sc_list = sc_list + sc_k_list*kweight
         end if
@@ -559,6 +588,7 @@ contains
         endif
 
         if (eval_sc) then
+          nk_interpolated = loop_xyz + 1 ! since loop_xyz starts from 0
           call berry_get_sc_klist(kpt, sc_k_list)
           sc_list = sc_list + sc_k_list*kweight
         end if
@@ -618,6 +648,12 @@ contains
       end do !loop_xyz
 
     end if !wanint_kpoint_file
+
+    ! Finished writing Berry connection on interpolated k-points V Ravindran 11/04/2025
+    if (write_AA_int .and. on_root) then
+       close(AA_int_unit,iostat=ierr)
+       if (ierr/=0) call io_error('Failed to close interpolated Berry connection file')
+    end if
 
     ! Collect contributions from all nodes
     !
@@ -1577,6 +1613,7 @@ contains
       wham_get_eig_deleig_TB_conv, wham_get_eig_UU_HH_AA_sc_TB_conv
     use w90_get_oper, only: AA_R
     use w90_utility, only: utility_rotate, utility_zdotu
+    use w90_comms, only: on_root
     ! Arguments
     !
     real(kind=dp), intent(in)                        :: kpt(3)
@@ -1594,7 +1631,7 @@ contains
     real(kind=dp), allocatable    :: occ(:)
 
     complex(kind=dp)              :: sum_AD(3, 3), sum_HD(3, 3), r_mn(3), gen_r_nm(3)
-    integer                       :: i, if, a, b, c, bc, n, m, r, ifreq, istart, iend
+    integer                       :: i, if, a, b, c, bc, n, m, r, ifreq, istart, iend, iw1,iw2
     real(kind=dp)                 :: I_nm(3, 6), &
                                      omega(kubo_nfreq), delta(kubo_nfreq), joint_level_spacing, &
                                      eta_smr, Delta_k, arg, vdum(3), occ_fac, wstep, wmin, wmax
@@ -1635,6 +1672,16 @@ contains
       call wham_get_eig_UU_HH_AA_sc(kpt, eig, UU, HH, HH_da, HH_dadb)
       call pw90common_fourier_R_to_k_vec_dadb(kpt, AA_R, OO_da=AA, OO_dadb=AA_da)
       call wham_get_eig_deleig(kpt, eig, eig_da, HH, HH_da, UU)
+    end if
+
+    ! V Ravindran 11/04/2025 - Write interpolated Berry connection (check this is correct matrix!)
+    if (write_AA_int .and. on_root) then
+       write(AA_int_unit,'("kpoint ",I9,3(F12.7,1x))') nk_interpolated, kpt(:)
+       do iw1=1,num_wann
+          do iw2=1,num_wann
+             write(AA_int_unit,'(2I4,6ES16.8)') iw1,iw2,AA(iw1,iw2,:)
+          end do
+       end do
     end if
 
     ! get electronic occupations
